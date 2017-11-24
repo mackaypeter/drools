@@ -16,7 +16,6 @@
 
 package org.drools.compiler.integrationtests.session;
 
-import java.math.BigDecimal;
 import org.drools.compiler.integrationtests.facts.AnEnum;
 import org.drools.compiler.integrationtests.facts.FactWithBigDecimal;
 import org.drools.compiler.integrationtests.facts.FactWithBoolean;
@@ -29,15 +28,18 @@ import org.drools.compiler.integrationtests.facts.FactWithInteger;
 import org.drools.compiler.integrationtests.facts.FactWithLong;
 import org.drools.compiler.integrationtests.facts.FactWithShort;
 import org.drools.compiler.integrationtests.facts.FactWithString;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.kie.api.runtime.KieSession;
 
-public class DataTypeEvaluationConcurrentSessionsTest extends AbstractConcurrentSessionsTest {
+import java.math.BigDecimal;
+import java.util.concurrent.atomic.AtomicInteger;
 
-    public DataTypeEvaluationConcurrentSessionsTest(final boolean enforcedJitting, final boolean serializeKieBase,
-                                                       final boolean sharedKieBase) {
-        super(enforcedJitting, serializeKieBase, sharedKieBase);
+import static org.junit.Assert.assertEquals;
+
+public class DataTypeEvaluationSharedSessionParallelTest extends AbstractParallelTest {
+
+    public DataTypeEvaluationSharedSessionParallelTest(final boolean enforcedJitting, final boolean serializeKieBase) {
+        super(enforcedJitting, serializeKieBase);
     }
 
     @Test
@@ -136,75 +138,37 @@ public class DataTypeEvaluationConcurrentSessionsTest extends AbstractConcurrent
     }
 
     private void testFactAttributeType(final String ruleConstraint, final Object factInserted) throws InterruptedException {
-        final String drl1 =
-                " import org.drools.compiler.integrationtests.facts.*;\n" +
-                        " rule R1 \n" +
-                        " when \n" +
-                        ruleConstraint +
-                        " then \n" +
-                        " end ";
+        int numberOfThreads = 10;
 
-        parallelTest( 1, 10, new KieSessionExecutor() {
+
+        final String drl =
+            " import org.drools.compiler.integrationtests.facts.*;\n" +
+                " global " + AtomicInteger.class.getCanonicalName() + " numberOfFirings;\n" +
+                " rule R1 \n" +
+                " when \n" +
+                ruleConstraint +
+                " then \n" +
+                " numberOfFirings.incrementAndGet(); \n" +
+                " end ";
+
+        KieSession kieSession = getKieBase(drl).newKieSession();
+
+        AtomicInteger numberOfFirings = new AtomicInteger(0);
+
+        parallelTest(numberOfThreads, new ParallelTestExecutor() {
             @Override
-            public boolean execute( KieSession kieSession, int counter ) {
+            public boolean execute(int counter) {
+                if (kieSession.getGlobal("numberOfFirings") == null) {
+                    kieSession.setGlobal("numberOfFirings", numberOfFirings);
+                }
+                ;
                 kieSession.insert(factInserted);
-                return kieSession.fireAllRules() == 1;
-            }
-        }, drl1);
-    }
-
-    @Test
-    public void testEnum2() throws InterruptedException {
-        String drl1 =
-                "import " + Product.class.getCanonicalName() + ";\n" +
-                        "import " + CategoryTypeEnum.class.getCanonicalName() + ";\n" +
-                        "rule R1 when\n" +
-                        "  $s : String( this == \"odd\" )\n" +
-                        "  $p : Product( id != \"test\", categoryAsEnum == CategoryTypeEnum.ODD, firings not contains \"R1\" )\n" +
-                        "then\n" +
-                        "  $p.getFirings().add(\"R1\");\n" +
-                        "  $p.appendDescription($s);\n" +
-                        "  update($p);\n" +
-                        "end\n";
-
-        String drl2 =
-                "import " + Product.class.getCanonicalName() + ";\n" +
-                        "import " + CategoryTypeEnum.class.getCanonicalName() + ";\n" +
-                        "rule R2 when\n" +
-                        "  $s : String( this == \"pair\" )\n" +
-                        "  $p : Product( id != \"test\", categoryAsEnum == CategoryTypeEnum.PAIR, firings not contains \"R2\" )\n" +
-                        "then\n" +
-                        "  $p.getFirings().add(\"R2\");\n" +
-                        "  $p.appendDescription($s);\n" +
-                        "  update($p);" +
-                        "end\n";
-
-        parallelTest( 10, 10, new KieSessionExecutor() {
-            @Override
-            public boolean execute( KieSession kieSession, int counter ) {
-                Product[] products = new Product[10];
-                final boolean pair = counter % 2 == 0;
-                final String pairString = pair ? "pair" : "odd";
-                for (int i = 0; i < 10; i++) {
-                    products[i] = new Product( "" + i, pairString );
-                }
-
-                kieSession.insert( pairString );
-                for (int i = 0; i < 10; i++) {
-                    kieSession.insert( products[i] );
-                }
-
                 kieSession.fireAllRules();
-
-                for (int i = 0; i < 10; i++) {
-                    if ( products[i].getCategory().equals(pairString) && !products[i].getCategory().equals( products[i].getDescription() ) ) {
-                        return false;
-                    } else if (!products[i].getCategory().equals(pairString) && !products[i].getDescription().isEmpty()) {
-                        return false;
-                    }
-                }
                 return true;
             }
-        }, drl1, drl2 );
+        });
+        disposeSession(kieSession);
+        assertEquals(1, numberOfFirings.get());
     }
+
 }
